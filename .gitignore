@@ -1,0 +1,7 @@
+# Build artifacts
+obj/
+*.o
+tictactoe_cpp
+
+# Mac OS
+.DS_Store
