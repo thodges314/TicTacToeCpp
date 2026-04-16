@@ -336,7 +336,7 @@ async function init() {
     engine.ccall('wasm_init', null, [], []);
 
     // Load opening book
-    const resp = await fetch('../public/opening_book.json');
+    const resp = await fetch('public/opening_book.json');
     openingBook = await resp.json();
 
     engineReady = true;
