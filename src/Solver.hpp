@@ -1,6 +1,5 @@
 #pragma once
 #include "Bitboard.hpp"
-#include <unordered_map>
 #include <algorithm>
 #include <limits>
 #include <future>
@@ -8,10 +7,27 @@
 #include <utility>
 #include <mutex>
 #include <chrono>
+#include <atomic>
+
+struct TTEntry {
+    std::atomic<uint64_t> key{0};
+    std::atomic<int> score{-9999};
+};
 
 class Solver {
 public:
-    int minimax(Bitboard board, int depth, int alpha, int beta, bool isMaximizing, std::unordered_map<uint64_t, int>& tt) {
+    TTEntry* table;
+    size_t tableSize = 1000000000; // 1 Billion Entries (~16 GB of pure Hash Map power)
+
+    Solver() {
+        table = new TTEntry[tableSize];
+    }
+
+    ~Solver() {
+        delete[] table;
+    }
+
+    int minimax(Bitboard board, int depth, int alpha, int beta, bool isMaximizing) {
         if (board.checkWin(1)) return 1000 - depth; // X wins
         if (board.checkWin(2)) return -1000 + depth; // O wins
         
@@ -19,9 +35,15 @@ public:
         if (moves.empty()) return 0; // Draw
 
         uint64_t canonicalKey = board.getCanonicalState();
-        auto it = tt.find(canonicalKey);
-        if (it != tt.end()) {
-            return it->second;
+        size_t index = canonicalKey % tableSize;
+
+        // --- GLOBAL LOCKLESS CACHE LOOKUP ---
+        uint64_t cachedKey = table[index].key.load(std::memory_order_relaxed);
+        if (cachedKey == canonicalKey) {
+            int cachedScore = table[index].score.load(std::memory_order_relaxed);
+            if (cachedScore != -9999) { // Avoid false hits on raw default values
+                return cachedScore;
+            }
         }
 
         if (isMaximizing) {
@@ -29,24 +51,31 @@ public:
             for (int m : moves) {
                 Bitboard nextBoard = board;
                 nextBoard.setPiece(m / board.size, m % board.size, 1);
-                int eval = minimax(nextBoard, depth + 1, alpha, beta, false, tt);
+                int eval = minimax(nextBoard, depth + 1, alpha, beta, false);
                 maxEval = std::max(maxEval, eval);
                 alpha = std::max(alpha, eval);
                 if (beta <= alpha) break; // Beta cutoff
             }
-            tt[canonicalKey] = maxEval;
+            
+            // --- GLOBAL LOCKLESS CACHE WRITE OVERWRITE ---
+            table[index].score.store(maxEval, std::memory_order_relaxed);
+            table[index].key.store(canonicalKey, std::memory_order_relaxed);
             return maxEval;
+            
         } else {
             int minEval = std::numeric_limits<int>::max();
             for (int m : moves) {
                 Bitboard nextBoard = board;
                 nextBoard.setPiece(m / board.size, m % board.size, 2);
-                int eval = minimax(nextBoard, depth + 1, alpha, beta, true, tt);
+                int eval = minimax(nextBoard, depth + 1, alpha, beta, true);
                 minEval = std::min(minEval, eval);
                 beta = std::min(beta, eval);
                 if (beta <= alpha) break; // Alpha cutoff
             }
-            tt[canonicalKey] = minEval;
+            
+            // --- GLOBAL LOCKLESS CACHE WRITE OVERWRITE ---
+            table[index].score.store(minEval, std::memory_order_relaxed);
+            table[index].key.store(canonicalKey, std::memory_order_relaxed);
             return minEval;
         }
     }
@@ -64,19 +93,22 @@ public:
                     std::lock_guard<std::mutex> lock(cout_mutex);
                     std::cout << "  -> Thread starting branch [" << m / board.size << "," << m % board.size << "]...\n";
                 }
-                std::unordered_map<uint64_t, int> localTT; 
+                
                 Bitboard nextBoard = board;
                 nextBoard.setPiece(m / board.size, m % board.size, isX ? 1 : 2);
                 
                 auto t_start = std::chrono::high_resolution_clock::now();
-                int eval = minimax(nextBoard, 0, std::numeric_limits<int>::min(), std::numeric_limits<int>::max(), !isX, localTT);
+                
+                // We no longer pass localTT downward! It inherently calls the global `table` directly lock-free!
+                int eval = minimax(nextBoard, 0, std::numeric_limits<int>::min(), std::numeric_limits<int>::max(), !isX);
+                
                 auto t_end = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double, std::milli> ms = t_end - t_start;
 
                 if (board.size == 5) {
                     std::lock_guard<std::mutex> lock(cout_mutex);
                     std::cout << "  -> Thread finished branch [" << m / board.size << "," << m % board.size 
-                              << "] | Score: " << eval << " | Cache Size: " << localTT.size() 
+                              << "] | Score: " << eval 
                               << " | Thread Time: " << ms.count() << " ms\n";
                 }
 

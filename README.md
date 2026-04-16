@@ -28,7 +28,7 @@ Many board states are mathematically identical, just rotated or flipped. A squar
 
 ### 5. Transposition Tables (TT)
 Even with symmetries, different move orders can lead to the identical resulting board state (Transpositions).
-*   **Implementation:** The engine caches previously evaluated canonical board states in a `std::unordered_map` (Hash Table). If it encounters a state it has seen before, it simply retrieves the exact evaluation in $O(1)$ time, skipping millions of redundant branch evaluations.
+*   **Implementation:** The engine uniquely caches previously evaluated states globally using a massive Fixed-Size Lockless Array instead of standard Hash Maps. If it encounters a state seen before by any active thread, it simply retrieves the exact evaluation in $O(1)$ time utilizing `std::atomic` variables for data-race safety without mutex contention.
 
 ---
 
@@ -38,11 +38,11 @@ This engine makes deliberate use of the unique architecture of the M2 Studio.
 
 ### Thread-Level Parallelism via `std::async`
 Instead of exploring the top-level branches sequentially, `src/Solver.hpp` dispatches each initial available move into its own thread using C++ `std::async(std::launch::async, ...)`. 
-*   **M2 Studio Synergy:** The M2 Max/Ultra chips possess up to 12 or 24 CPU cores. Dispatching the root game tree nodes to concurrent threads completely saturates the available high-performance (P-Cores) of the M2 chip, returning the optimal move asynchronously.
+*   **M2 Studio Synergy:** The M2 Max/Ultra chips possess up to 12 or 24 CPU cores. Dispatching the root game tree nodes to concurrent threads completely saturates the available high-performance CPU cores, computing massive sub-trees entirely independently.
 
-### Local Thread-Safe Caching (RAM Utilization)
-When running deeply nested tree searches asynchronously, shared resources easily become memory bottlenecks due to mutex locking.
-*   **Memory Footprint & M2 Synergy:** Instead of using one globally locked Transposition Table, the engine generates a discrete, local `std::unordered_map` for each independent thread. This deliberately trades memory for speed. With an M2 Studio boasting **32 GB of Unified Memory**, the system can handle massive, isolated cache allocations spanning hundreds of megabytes per thread without inducing thrashing or swapping, completely eliminating lock contention and keeping the P-Cores fed.
+### Complete RAM Elimination (Global Lockless Caching)
+To combat the inevitable SSD Memory-Swapping Death commonly associated with huge independent Hash Maps expanding infinitely across threads, this C++ engine adopts a professional chess-engine architecture.
+*   **16GB Lockless Table:** It immediately statically allocates a 1,000,000,000-entry Transposition Table array. At exactly 16 GB of memory, it never consumes another byte. Every thread globally targets it using `key % 1_000_000_000` via `std::memory_order_relaxed` atomics. The engine effortlessly scales to 12+ cores sharing their computed symmetric states simultaneously without ever triggering a single thread lock or SSD memory dump.
 
 ### Unified Memory Architecture
 Apple Silicon features a unified memory layout that provides the CPU direct, high-bandwidth (400+ GB/s) access to system RAM. Because our recursive functions are heavily memory-bound (constantly retrieving `uint64_t` keys from the Transposition Table), the M2's high-bandwidth capabilities perfectly supplement the engine.
