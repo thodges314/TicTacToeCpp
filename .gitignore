@@ -1,0 +1,11 @@
+# Native build artifacts
+tools/gen_book
+
+# OS / editor
+.DS_Store
+.vscode/
+*.swp
+
+# Note: public/engine.js, public/engine.wasm, public/opening_book.json
+# are intentionally committed — GitHub Pages has no C++/WASM build step,
+# so the built artifacts must be in the repo for the site to work.

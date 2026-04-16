@@ -1,0 +1,21 @@
+{
+  "boardSize": 4,
+  "target": 4,
+  "computerFirst": {
+    "row": 1, "col": 1
+  },
+  "computerSecond": {
+    "corner": {
+      "canonicalHuman": [0,0],
+      "response":       [1,1]
+    },
+    "edge": {
+      "canonicalHuman": [0,1],
+      "response":       [1,1]
+    },
+    "inner": {
+      "canonicalHuman": [1,1],
+      "response":       [1,2]
+    }
+  }
+}
