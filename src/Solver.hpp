@@ -77,18 +77,25 @@ public:
     Solver()  { table = new TTEntry[tableSize]; } // zero-inits → all INVALID
     ~Solver() { delete[] table; }
 
-    // ---- Minimax with Alpha-Beta Pruning and TT lookup ----------------------
+    // ---- Minimax with Alpha-Beta Pruning, TT lookup, and depth cap -----------
     //
     // Bound types are classified and stored correctly:
     //   bestEval <= originalAlpha  →  UPPER  (failed low;  true value ≤ bestEval)
     //   bestEval >= originalBeta   →  LOWER  (failed high; true value ≥ bestEval)
     //   otherwise                  →  EXACT
-    int minimax(Bitboard board, int depth, int alpha, int beta, bool isMaximizing) {
+    //
+    // maxDepth: when depth == maxDepth and no terminal state has been reached,
+    // returns 0 (draw heuristic). Set to INT_MAX for a full perfect solve.
+    int minimax(Bitboard board, int depth, int alpha, int beta, bool isMaximizing,
+                int maxDepth = std::numeric_limits<int>::max()) {
         if (board.checkWin(1)) return  1000 - depth; // X wins
         if (board.checkWin(2)) return -1000 + depth; // O wins
 
         auto moves = board.getAvailableMoves();
         if (moves.empty()) return 0; // draw
+
+        // Depth cap: treat as a draw if we've hit the search limit
+        if (depth >= maxDepth) return 0;
 
         uint64_t canonicalKey = board.getCanonicalState();           // O(1)
         size_t   index        = canonicalKey & (tableSize - 1);      // power-of-2 modulo
@@ -119,7 +126,7 @@ public:
             for (int m : moves) {
                 Bitboard next = board;
                 next.setPiece(m / board.size, m % board.size, 1);
-                int eval = minimax(next, depth + 1, alpha, beta, false);
+                int eval = minimax(next, depth + 1, alpha, beta, false, maxDepth);
                 bestEval = std::max(bestEval, eval);
                 alpha    = std::max(alpha,    eval);
                 if (beta <= alpha) break; // beta cutoff
@@ -129,7 +136,7 @@ public:
             for (int m : moves) {
                 Bitboard next = board;
                 next.setPiece(m / board.size, m % board.size, 2);
-                int eval = minimax(next, depth + 1, alpha, beta, true);
+                int eval = minimax(next, depth + 1, alpha, beta, true, maxDepth);
                 bestEval = std::min(bestEval, eval);
                 beta     = std::min(beta,     eval);
                 if (beta <= alpha) break; // alpha cutoff
@@ -154,7 +161,8 @@ public:
     // prevents thread-thrashing and ensures the OS scheduler is never overloaded.
     // Because all threads share the global TT, later batches benefit from cache
     // hits produced by earlier batches — a meaningful speedup for 5×5 boards.
-    std::pair<int, int> getBestMove(Bitboard board, bool isX) {
+    std::pair<int, int> getBestMove(Bitboard board, bool isX,
+                                    int maxDepth = std::numeric_limits<int>::max()) {
         auto moves = board.getAvailableMoves();
         if (moves.empty()) return {-1, 0};
 
@@ -177,7 +185,7 @@ public:
             for (size_t j = i; j < batchEnd; j++) {
                 int m = moves[j];
                 futures.push_back(std::async(std::launch::async,
-                    [this, board, m, isX, &cout_mutex]() -> std::pair<int,int> {
+                        [this, board, m, isX, maxDepth, &cout_mutex]() -> std::pair<int,int> {
                         if (board.size >= 4) {
                             std::lock_guard<std::mutex> lk(cout_mutex);
                             std::cout << "  -> Thread starting branch ["
@@ -190,7 +198,7 @@ public:
                         int eval = minimax(next, 0,
                                           std::numeric_limits<int>::min(),
                                           std::numeric_limits<int>::max(),
-                                          !isX);
+                                          !isX, maxDepth);
                         auto t1  = std::chrono::high_resolution_clock::now();
                         std::chrono::duration<double, std::milli> ms = t1 - t0;
 
